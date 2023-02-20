@@ -1,0 +1,7 @@
+[workspace]
+
+members = [
+    "rust_chat",
+    "rust_chat_server",
+    "rust_chat_client",
+]
