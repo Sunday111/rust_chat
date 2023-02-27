@@ -1,78 +1,102 @@
-use std::net::SocketAddr;
+use serde_derive::{Deserialize, Serialize};
+use serde_json;
 use std::net::TcpStream;
-use std::io::Read;
+
+use crate::packet::{Packet, PacketError};
 
 /* Just created connection.
  * Message with handshake data has not been accepted yet
  */
-struct HandshakeState {
-    data: Vec<u8>,
+pub struct HandshakeState {
+    packet: Packet,
+    stream: TcpStream,
+}
+
+#[derive(Serialize, Deserialize)]
+struct HandshakeMessage {
+    username: String,
 }
 
 impl HandshakeState {
-    fn new() -> HandshakeState {
+    fn new(stream: TcpStream) -> HandshakeState {
         HandshakeState {
-            data: vec![0;1024]
+            packet: Packet::new(),
+            stream: stream,
         }
     }
 
-    fn read_data(&mut self, stream: &mut TcpStream) {
-        //let r = stream.read()
-        // let reader = BufReader::new(stream);
+    fn read(mut self) -> Connection {
+        self.packet = self.packet.advance_until_would_block(&mut self.stream);
+        match self.packet {
+            Packet::Complete(data) => match serde_json::from_slice::<HandshakeMessage>(&data) {
+                Ok(message) => Connection::Established(EstablishedConnection {
+                    info: ConnectionInfo { username: message.username },
+                    stream: self.stream,
+                }),
+                Err(_) => Connection::Closed(ClosedConnection {
+                    reason: ConnectionClosedReason::InvalidHandshakeMessage,
+                }),
+            },
+            Packet::Failed(err) => Connection::Closed(ClosedConnection {
+                reason: ConnectionClosedReason::PacketReadingError(err),
+            }),
+            Packet::InProgress(state) => Connection::HandShake(HandshakeState {
+                packet: Packet::InProgress(state),
+                stream: self.stream,
+            }),
+            Packet::Size(state) => Connection::HandShake(HandshakeState {
+                packet: Packet::Size(state),
+                stream: self.stream,
+            }),
+        }
     }
 }
 
 /* Initialized and accepted connection
  */
-struct EstablishedState {}
+struct ConnectionInfo {
+    username: String,
+}
+pub struct EstablishedConnection {
+    info: ConnectionInfo,
+    stream: TcpStream,
+}
 
-impl EstablishedState {
-    fn new() -> EstablishedState {
-        EstablishedState {
-        }
-    }
-
+impl EstablishedConnection {
     fn read_data(&mut self, stream: &mut TcpStream) {
         //let r = stream.read()
         // let reader = BufReader::new(stream);
     }
 }
 
-/* Closed connection
- */
-struct ClosedState {}
-
-enum ConnectionState {
-    HandShake(HandshakeState),
-    Established(EstablishedState),
-    Closed(ClosedState),
+enum ConnectionClosedReason {
+    InvalidHandshakeMessage,
+    PacketReadingError(PacketError),
+    StreamError,
 }
 
-pub struct Connection {
-    stream: TcpStream,
-    address: SocketAddr,
-    state: ConnectionState,
+/* Closed connection
+ */
+pub struct ClosedConnection {
+    reason: ConnectionClosedReason,
+}
+
+pub enum Connection {
+    HandShake(HandshakeState),
+    Established(EstablishedConnection),
+    Closed(ClosedConnection),
 }
 
 impl Connection {
-    pub fn new(stream: TcpStream, addr: SocketAddr) -> Connection {
-        Connection {
-            stream: stream,
-            address: addr,
-            state: ConnectionState::HandShake(HandshakeState::new()),
-        }
+    pub fn new(stream: TcpStream) -> Connection {
+        Connection::HandShake(HandshakeState::new(stream))
     }
 
-    pub fn read_data(&mut self) {
-        match &mut self.state {
-            ConnectionState::HandShake(s) => {
-                s.read_data(&mut self.stream);
-
-            },
-            ConnectionState::Established(s) => {
-                s.read_data(&mut self.stream);
-            }
-            ConnectionState::Closed(_) => {}
+    pub fn read_once(self) -> Connection {
+        match self {
+            Connection::HandShake(state) => state.read(),
+            Connection::Established(state) => Connection::Established(state),
+            Connection::Closed(state) => Connection::Closed(state),
         }
     }
 }

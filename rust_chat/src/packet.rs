@@ -8,7 +8,7 @@ pub struct PacketReadingSize {
 }
 
 impl PacketReadingSize {
-    fn progress<T>(mut self, stream: &mut T) -> Packet
+    fn advance<T>(mut self, stream: &mut T) -> Packet
     where
         T: Read,
     {
@@ -56,12 +56,12 @@ pub struct PacketInProgress {
 }
 
 impl PacketInProgress {
-    fn progress<T>(mut self, stream: &mut T) -> Packet
+    fn advance<T>(mut self, stream: &mut T) -> (Packet, usize)
     where
         T: Read,
     {
         if self.received == self.data.len() {
-            return Packet::Complete(self.data)
+            return (Packet::Complete(self.data), 0)
         }
 
         let slice = unsafe {
@@ -72,18 +72,23 @@ impl PacketInProgress {
         match stream.read(slice) {
             Ok(bytes_read) => {
                 if bytes_read == 0 {
-                    return Packet::Failed(PacketError::StreamClosed)
+                    return (Packet::Failed(PacketError::StreamClosed), 0)
                 }
 
                 self.received += bytes_read;
-                return Packet::InProgress(self)
+
+                if self.received < self.data.len() {
+                    return (Packet::InProgress(self), bytes_read)
+                }
+
+                return (Packet::Complete(self.data), bytes_read)
             },
             Err(error) => {
                 if error.kind() == std::io::ErrorKind::WouldBlock {
-                    return Packet::InProgress(self)
+                    return (Packet::InProgress(self), 0)
                 }
 
-                Packet::Failed(PacketError::StreamError)
+                (Packet::Failed(PacketError::StreamError), 0)
             }
         }
     }
@@ -115,19 +120,19 @@ impl Packet {
         Packet::Size(PacketReadingSize { size: 0, read: 0 })
     }
 
-    pub fn progress<T>(self, stream: &mut T) -> Packet
+    pub fn advance<T>(self, stream: &mut T) -> Packet
     where
         T: Read,
     {
         match self {
-            Packet::Size(state) => state.progress(stream),
-            Packet::InProgress(state) => state.progress(stream),
+            Packet::Size(state) => state.advance(stream),
+            Packet::InProgress(state) => state.advance(stream).0,
             Packet::Complete(_) => self,
             Packet::Failed(_) => self,
         }
     }
 
-    pub fn progress_loop<T>(self, stream: &mut T) -> Packet
+    pub fn advance_to_complete<T>(self, stream: &mut T) -> Packet
         where
             T: Read,
     {
@@ -135,8 +140,38 @@ impl Packet {
         let mut finished = false;
         while !finished {
             packet = match packet {
-                Packet::Size(state) => state.progress(stream),
-                Packet::InProgress(state) => state.progress(stream),
+                Packet::Size(state) => state.advance(stream),
+                Packet::InProgress(state) => state.advance(stream).0,
+                Packet::Complete(data) => {
+                    finished = true;
+                    Packet::Complete(data)
+                },
+                Packet::Failed(err) => {
+                    finished = true;
+                    Packet::Failed(err)
+                }
+            }
+        }
+
+        packet
+    }
+
+    pub fn advance_until_would_block<T>(self, stream: &mut T) -> Packet
+        where
+            T: Read,
+    {
+        let mut packet = self;
+        let mut finished = false;
+        while !finished {
+            packet = match packet {
+                Packet::Size(state) => state.advance(stream),
+                Packet::InProgress(state) => {
+                    let (new_state, read_count) = state.advance(stream);
+                    if read_count == 0 {
+                        finished = true;
+                    }
+                    new_state
+                } ,
                 Packet::Complete(data) => {
                     finished = true;
                     Packet::Complete(data)
@@ -155,7 +190,23 @@ impl Packet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{io::{BufReader, Write}, os::windows::thread};
+    use std::{io::{BufReader, Write}};
+    use rand::{Rng, SeedableRng};
+    use rand;
+
+    static PORT_COUNTER: std::sync::Mutex<std::cell::RefCell<i32>> = std::sync::Mutex::new(std::cell::RefCell::new(5432));
+
+    fn get_next_port() -> i32 {
+        let guard = PORT_COUNTER.lock().expect("");
+        let mut value_ref = guard.borrow_mut();
+        let previous_value = *value_ref;
+        *value_ref += 1;
+        previous_value
+    }
+
+    fn next_localhost_address() -> String {
+        format!("127.0.0.1:{}", get_next_port())
+    }
 
     fn make_buffer_for_packet(payload:&str) -> Vec<u8> {
         assert_ne!(payload.len(), 0);
@@ -191,7 +242,7 @@ mod tests {
             }
         }
 
-        let packet = packet.progress(&mut reader);
+        let packet = packet.advance(&mut reader);
         match &packet {
             Packet::Size(state) => {
                 assert_eq!(state.read, 4);
@@ -202,7 +253,7 @@ mod tests {
             }
         }
 
-        let packet = packet.progress(&mut reader);
+        let packet = packet.advance(&mut reader);
         match &packet {
             Packet::InProgress(state) => {
                 assert_eq!(state.data.len(), payload.len());
@@ -213,7 +264,7 @@ mod tests {
             }
         }
 
-        let packet = packet.progress(&mut reader);
+        let packet = packet.advance(&mut reader);
         match &packet {
             Packet::InProgress(state) => {
                 assert_eq!(state.data.len(), payload.len());
@@ -224,7 +275,7 @@ mod tests {
             }
         }
 
-        let packet = packet.progress(&mut reader);
+        let packet = packet.advance(&mut reader);
         match packet {
             Packet::Complete(data) => {
                 assert_eq!(data.len(), payload.len());
@@ -240,11 +291,11 @@ mod tests {
     }
 
     #[test]
-    fn progress_loop() {
+    fn advance_blocking() {
         let payload = "Example string";
         let buffer = make_buffer_for_packet(&payload);
         let mut reader = BufReader::new(&buffer[..]);
-        let packet = Packet::new().progress_loop(&mut reader);
+        let packet = Packet::new().advance_to_complete(&mut reader);
 
         if let Packet::Complete(data) = packet {
             assert_eq!(data.len(), payload.len());
@@ -268,7 +319,7 @@ mod tests {
         };
         let mut reader = BufReader::new(&buffer[..]);
 
-        if let Packet::Complete(data) = Packet::new().progress_loop(&mut reader) {
+        if let Packet::Complete(data) = Packet::new().advance_to_complete(&mut reader) {
             assert_eq!(data.len(), payload_a.len());
             assert_eq!(
                 String::from_utf8(data).expect("Failed to make a string from buffer"),
@@ -278,7 +329,7 @@ mod tests {
             panic!("Unexpected state of packet");
         }
 
-        if let Packet::Complete(data) = Packet::new().progress_loop(&mut reader) {
+        if let Packet::Complete(data) = Packet::new().advance_to_complete(&mut reader) {
             assert_eq!(data.len(), payload_b.len());
             assert_eq!(
                 String::from_utf8(data).expect("Failed to make a string from buffer"),
@@ -295,31 +346,47 @@ mod tests {
         let buffer = make_buffer_for_packet(&payload);
         let mut reader = BufReader::new(&buffer[0..5]);
 
-        if let Packet::Failed(error) = Packet::new().progress_loop(&mut reader) {
+        if let Packet::Failed(error) = Packet::new().advance_to_complete(&mut reader) {
             assert_eq!(error, PacketError::StreamClosed{});
         } else {
             panic!("Unexpected state of packet");
         }
     }
 
+    fn generate_random_string(seed:u64, min_length: usize, max_length: usize) -> String {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(seed);
+        let length = rng.gen_range(min_length..max_length + 1);
+    
+        (0..length)
+            .map(|_| rng.gen_range(b'a'..b'z' + 1) as char)
+            .collect()
+    }
+
     #[test]
     fn progress_loop_from_tcp() {
-        let payload = "Hello, tcp stream!";
+        let payload = generate_random_string(1234, 2000, 10000);
+        let address = next_localhost_address();
 
         let join_handle = {
+            // clone values before they move to spawned thread
             let payload = payload.clone();
+            let address = address.clone();
             std::thread::spawn(move || {
-                let listener = std::net::TcpListener::bind("127.0.0.1:5432").unwrap();
+                let listener = std::net::TcpListener::bind(address).unwrap();
                 match listener.incoming().next().expect("") {
                     Ok(mut stream) => {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         let buffer = make_buffer_for_packet(&payload);
 
+                        println!("First bytes in buffer: {:?}", &buffer[0..4]);
+
                         let mut k = 0;
+                        let mut part_size_generator = rand::rngs::StdRng::seed_from_u64(1234);
                         while k < buffer.len() {
-                            stream.write_all(&buffer[k..k+2]).unwrap();
+                            let part_size = part_size_generator.gen_range(1..200);
+                            stream.write_all(&buffer[k..std::cmp::min(buffer.len(), k + part_size)]).unwrap();
                             std::thread::sleep(std::time::Duration::from_millis(100));
-                            k += 2;
+                            k += part_size;
                         }
 
                         // read something so that socket is not closed too earlier
@@ -334,10 +401,10 @@ mod tests {
         };
 
         {
-            let stream = std::net::TcpStream::connect("127.0.0.1:5432").unwrap();
+            let stream = std::net::TcpStream::connect(address).unwrap();
             stream.set_nonblocking(true).expect("Can't make stream nonblocking");
             let mut reader = BufReader::new(stream);
-            let packet = Packet::new().progress_loop(&mut reader);
+            let packet = Packet::new().advance_to_complete(&mut reader);
     
             if let Packet::Complete(data) = packet {
                 assert_eq!(data.len(), payload.len());

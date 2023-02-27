@@ -26,8 +26,8 @@ impl ChatServer {
     pub fn accept_connections(&mut self) {
         loop {
             match self.connection_listener.accept() {
-                Ok((stream, address)) => {
-                    let new_connection = Connection::new(stream, address);
+                Ok((stream, _)) => {
+                    let new_connection = Connection::new(stream);
                     self.connections.push(new_connection);
                 }
                 Err(error) => {
