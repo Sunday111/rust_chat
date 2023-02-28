@@ -1,9 +1,7 @@
 mod chat_result;
 mod connection;
-mod packet;
-
-use std::net::SocketAddr;
-use std::net::TcpStream;
+mod incoming_packet;
+mod outgoing_packet;
 
 pub use chat_result::ChatError;
 pub use chat_result::ChatResult;

@@ -2,7 +2,7 @@ use serde_derive::{Deserialize, Serialize};
 use serde_json;
 use std::net::TcpStream;
 
-use crate::packet::{Packet, PacketError};
+use crate::incoming_packet::{Packet, PacketError};
 
 /* Just created connection.
  * Message with handshake data has not been accepted yet

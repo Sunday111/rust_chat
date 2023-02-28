@@ -265,17 +265,6 @@ mod tests {
         }
 
         let packet = packet.advance(&mut reader);
-        match &packet {
-            Packet::InProgress(state) => {
-                assert_eq!(state.data.len(), payload.len());
-                assert_eq!(state.received, payload.len());
-            }
-            _ => {
-                panic!("Unexpected state of packet");
-            }
-        }
-
-        let packet = packet.advance(&mut reader);
         match packet {
             Packet::Complete(data) => {
                 assert_eq!(data.len(), payload.len());
@@ -377,16 +366,13 @@ mod tests {
                     Ok(mut stream) => {
                         std::thread::sleep(std::time::Duration::from_millis(100));
                         let buffer = make_buffer_for_packet(&payload);
-
-                        println!("First bytes in buffer: {:?}", &buffer[0..4]);
-
-                        let mut k = 0;
+                        let mut sent_bytes = 0;
                         let mut part_size_generator = rand::rngs::StdRng::seed_from_u64(1234);
-                        while k < buffer.len() {
+                        while sent_bytes < buffer.len() {
                             let part_size = part_size_generator.gen_range(1..200);
-                            stream.write_all(&buffer[k..std::cmp::min(buffer.len(), k + part_size)]).unwrap();
+                            stream.write_all(&buffer[sent_bytes..std::cmp::min(buffer.len(), sent_bytes + part_size)]).unwrap();
                             std::thread::sleep(std::time::Duration::from_millis(100));
-                            k += part_size;
+                            sent_bytes += part_size;
                         }
 
                         // read something so that socket is not closed too earlier

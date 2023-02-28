@@ -1,7 +1,7 @@
 use std::fmt::Debug;
 
 #[derive(Debug)]
-pub struct ChatError(String);
+pub struct ChatError(pub String);
 
 pub type ChatResult<T> = std::result::Result<T, ChatError>;
 
