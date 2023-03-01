@@ -138,7 +138,10 @@ impl Packet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::io::{BufWriter, Write};
+    use crate::test_utils::{
+        generate_random_string, make_buffer_for_packet, next_localhost_address,
+    };
+    use std::io::{BufWriter, Write, Read};
 
     #[test]
     fn create_new_packet() {
@@ -180,7 +183,7 @@ mod tests {
     #[test]
     fn detailed_advance_big_payload() {
         // size of backet is bigger than MAX_SEND_CHUNK so it can't be sent in one advance call
-        let payload = "Hello, world!".repeat((MAX_SEND_CHUNK / 13) + 1);
+        let payload = generate_random_string(1234, MAX_SEND_CHUNK, MAX_SEND_CHUNK);
         let mut buffer: Vec<u8> = Vec::new();
 
         {
@@ -217,27 +220,74 @@ mod tests {
     #[test]
     fn advance_until_sent() {
         // size of backet is bigger than MAX_SEND_CHUNK so it can't be sent in one advance call
-        let payload = "Hello, world!".repeat((MAX_SEND_CHUNK / 13) + 1);
-        let mut buffer: Vec<u8> = Vec::new();
+        let payload = generate_random_string(1234, MAX_SEND_CHUNK, MAX_SEND_CHUNK);
 
-        {
-            let mut writer = BufWriter::new(&mut buffer);
-            let packet = Packet::new(payload.as_bytes()).unwrap();
-            match packet.advance_until_sent(&mut writer) {
-                Packet::Sent => {}
-                _ => {
-                    panic!("Unexpected packet state")
+        let buffer = {
+            let mut buffer: Vec<u8> = Vec::new();
+            {
+                let mut writer = BufWriter::new(&mut buffer);
+                let packet = Packet::new(payload.as_bytes()).unwrap();
+                match packet.advance_until_sent(&mut writer) {
+                    Packet::Sent => {}
+                    _ => {
+                        panic!("Unexpected packet state")
+                    }
                 }
-            }
 
-            // flush stream
-            writer.flush().unwrap();
-        }
+                // flush stream
+                writer.flush().unwrap();
+            }
+            buffer
+        };
 
         assert_eq!(
             u32::from_be_bytes(buffer[0..4].try_into().unwrap()),
             payload.len() as u32
         );
         assert_eq!(&buffer[4..], payload.as_bytes());
+    }
+
+    
+
+    #[test]
+    fn advance_until_sent_tcp() {
+        let payload = generate_random_string(1234, MAX_SEND_CHUNK * 2, MAX_SEND_CHUNK * 10);
+        let address = next_localhost_address();
+
+        let join_handle = {
+            // clone values before they move to spawned thread
+            let payload = payload.clone();
+            let address = address.clone();
+            std::thread::spawn(move || {
+                let listener = std::net::TcpListener::bind(address).unwrap();
+                match listener.incoming().next().expect("") {
+                    Ok(mut stream) => {
+                        let mut data = Vec::new();
+                        stream.read_to_end(&mut data).expect("Failed to read from stream");
+                        assert_eq!(&data[4..], payload.as_bytes());
+                    }
+                    Err(e) => {
+                        eprintln!("failed to accept client connection: {}", e);
+                    }
+                }
+            })
+        };
+
+        {
+            let mut stream = std::net::TcpStream::connect(address).unwrap();
+            stream
+                .set_nonblocking(true)
+                .expect("Can't make stream nonblocking");
+            
+            let packet = Packet::new(payload.as_bytes()).unwrap();
+            match packet.advance_until_sent(&mut stream) {
+                Packet::Sent => {}
+                _ => {
+                    panic!("Unexpected packet state")
+                }
+            }
+        }
+
+        join_handle.join().unwrap()
     }
 }

@@ -342,7 +342,7 @@ mod tests {
                             sent_bytes += part_size;
                         }
 
-                        // read something so that socket is not closed too earlier
+                        // read something so that socket is not closed too early
                         let mut read_data = String::new();
                         stream.read_to_string(&mut read_data).unwrap();
                     }
