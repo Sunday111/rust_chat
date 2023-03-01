@@ -11,8 +11,9 @@ pub struct PacketInProgress {
 const MAX_SEND_CHUNK: usize = 1024;
 
 impl PacketInProgress {
-    pub fn advance<Stream>(mut self, stream: &mut Stream) -> Packet
-        where Stream: Write
+    pub fn advance<Stream>(mut self, stream: &mut Stream) -> (Packet, usize)
+    where
+        Stream: Write,
     {
         assert!(self.sent < self.data.len());
 
@@ -27,16 +28,16 @@ impl PacketInProgress {
                 self.sent += bytes_sent;
 
                 if self.sent < self.data.len() {
-                    Packet::InProgress(self)
+                    (Packet::InProgress(self), bytes_sent)
                 } else {
-                    Packet::Sent
+                    (Packet::Sent, bytes_sent)
                 }
             }
             Err(error) => {
                 if error.kind() == std::io::ErrorKind::WouldBlock {
-                    Packet::InProgress(self)
+                    (Packet::InProgress(self), 0)
                 } else {
-                    Packet::Failed(SendPacketError::StreamError(error))
+                    (Packet::Failed(SendPacketError::StreamError(error)), 0)
                 }
             }
         }
@@ -68,18 +69,69 @@ impl Packet {
 
         Ok(Packet::InProgress(PacketInProgress {
             data: data,
-            sent: 0
+            sent: 0,
         }))
     }
 
     pub fn advance<Stream>(self, stream: &mut Stream) -> Packet
-        where Stream: Write
+    where
+        Stream: Write,
     {
         match self {
-            Packet::InProgress(in_progress) => in_progress.advance(stream),
+            Packet::InProgress(in_progress) => in_progress.advance(stream).0,
             Packet::Failed(failed) => Packet::Failed(failed),
             Packet::Sent => Packet::Sent,
         }
+    }
+
+    pub fn advance_until_sent<Stream>(mut self, stream: &mut Stream) -> Packet
+    where
+        Stream: Write,
+    {
+        let mut finished = false;
+        while !finished {
+            self = match self {
+                Packet::InProgress(in_progress) => in_progress.advance(stream).0,
+                Packet::Sent => {
+                    finished = true;
+                    Packet::Sent
+                }
+                Packet::Failed(err) => {
+                    finished = true;
+                    Packet::Failed(err)
+                }
+            }
+        }
+
+        self
+    }
+
+    pub fn advance_until_would_block<Stream>(mut self, stream: &mut Stream) -> Packet
+    where
+        Stream: Write,
+    {
+        let mut finished = false;
+        while !finished {
+            self = match self {
+                Packet::InProgress(in_progress) => {
+                    let (packet, bytes_sent) = in_progress.advance(stream);
+                    if bytes_sent == 0 {
+                        finished = true;
+                    }
+                    packet
+                }
+                Packet::Sent => {
+                    finished = true;
+                    Packet::Sent
+                }
+                Packet::Failed(err) => {
+                    finished = true;
+                    Packet::Failed(err)
+                }
+            }
+        }
+
+        self
     }
 }
 
@@ -108,15 +160,20 @@ mod tests {
             let mut writer = BufWriter::new(&mut buffer);
             let packet = Packet::new(payload.as_bytes()).unwrap();
             match packet.advance(&mut writer) {
-                Packet::Sent => {},
-                _ => { panic!("Unexpected packet state") }
+                Packet::Sent => {}
+                _ => {
+                    panic!("Unexpected packet state")
+                }
             }
 
             // flush stream
             writer.flush().unwrap();
         }
 
-        assert_eq!(u32::from_be_bytes(buffer[0..4].try_into().unwrap()), payload.len() as u32);
+        assert_eq!(
+            u32::from_be_bytes(buffer[0..4].try_into().unwrap()),
+            payload.len() as u32
+        );
         assert_eq!(&buffer[4..], payload.as_bytes());
     }
 
@@ -133,20 +190,54 @@ mod tests {
                 Packet::InProgress(state) => {
                     assert_eq!(state.sent, MAX_SEND_CHUNK);
                     Packet::InProgress(state)
-                },
-                _ => { panic!("Unexpected packet state") }
+                }
+                _ => {
+                    panic!("Unexpected packet state")
+                }
             };
 
             match packet.advance(&mut writer) {
-                Packet::Sent => {},
-                _ => { panic!("Unexpected packet state") }
+                Packet::Sent => {}
+                _ => {
+                    panic!("Unexpected packet state")
+                }
             }
 
             // flush stream
             writer.flush().unwrap();
         }
 
-        assert_eq!(u32::from_be_bytes(buffer[0..4].try_into().unwrap()), payload.len() as u32);
+        assert_eq!(
+            u32::from_be_bytes(buffer[0..4].try_into().unwrap()),
+            payload.len() as u32
+        );
+        assert_eq!(&buffer[4..], payload.as_bytes());
+    }
+
+    #[test]
+    fn advance_until_sent() {
+        // size of backet is bigger than MAX_SEND_CHUNK so it can't be sent in one advance call
+        let payload = "Hello, world!".repeat((MAX_SEND_CHUNK / 13) + 1);
+        let mut buffer: Vec<u8> = Vec::new();
+
+        {
+            let mut writer = BufWriter::new(&mut buffer);
+            let packet = Packet::new(payload.as_bytes()).unwrap();
+            match packet.advance_until_sent(&mut writer) {
+                Packet::Sent => {}
+                _ => {
+                    panic!("Unexpected packet state")
+                }
+            }
+
+            // flush stream
+            writer.flush().unwrap();
+        }
+
+        assert_eq!(
+            u32::from_be_bytes(buffer[0..4].try_into().unwrap()),
+            payload.len() as u32
+        );
         assert_eq!(&buffer[4..], payload.as_bytes());
     }
 }
