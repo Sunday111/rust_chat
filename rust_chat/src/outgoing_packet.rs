@@ -6,17 +6,17 @@ use std::rc::Rc;
 pub struct PacketInProgress {
     data: Vec<u8>,
     sent: usize,
-    stream: Rc<RefCell<dyn Write>>,
 }
 
 const MAX_SEND_CHUNK: usize = 1024;
 
 impl PacketInProgress {
-    pub fn advance(mut self) -> Packet {
+    pub fn advance<Stream>(mut self, stream: &mut Stream) -> Packet
+        where Stream: Write
+    {
         assert!(self.sent < self.data.len());
 
         let write_result = {
-            let mut stream = self.stream.borrow_mut();
             let remaining_bytes_count = self.data.len() - self.sent;
             let send_bytes_count = std::cmp::min(remaining_bytes_count, MAX_SEND_CHUNK);
             stream.write(&self.data[self.sent..self.sent + send_bytes_count])
@@ -54,7 +54,7 @@ pub enum Packet {
 }
 
 impl Packet {
-    pub fn new(bytes: &[u8], stream: Rc<RefCell<Box<dyn Write>>>) -> ChatResult<Packet> {
+    pub fn new(bytes: &[u8]) -> ChatResult<Packet> {
         if bytes.len() == 0 {
             return Err(ChatError("Trying to send an empty packet".to_string()));
         }
@@ -68,14 +68,15 @@ impl Packet {
 
         Ok(Packet::InProgress(PacketInProgress {
             data: data,
-            sent: 0,
-            stream: stream,
+            sent: 0
         }))
     }
 
-    pub fn advance(self) -> Packet {
+    pub fn advance<Stream>(self, stream: &mut Stream) -> Packet
+        where Stream: Write
+    {
         match self {
-            Packet::InProgress(in_progress) => in_progress.advance(),
+            Packet::InProgress(in_progress) => in_progress.advance(stream),
             Packet::Failed(failed) => Packet::Failed(failed),
             Packet::Sent => Packet::Sent,
         }
@@ -85,16 +86,12 @@ impl Packet {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand;
-    use rand::{Rng, SeedableRng};
-    use std::io::{BufWriter, Write, Read};
+    use std::io::{BufWriter, Write};
 
     #[test]
     fn create_new_packet() {
         let payload = "Hello, world!";
-        let writer_box = Box::new(BufWriter::new(Vec::new() as Vec<u8>)) as Box<dyn Write>;
-        let stream = Rc::new(RefCell::new(writer_box));
-        let packet = Packet::new(payload.as_bytes(), Rc::clone(&stream)).unwrap();
+        let packet = Packet::new(payload.as_bytes()).unwrap();
         if let Packet::InProgress(in_progress) = packet {
             assert_eq!(in_progress.sent, 0);
         } else {
@@ -102,53 +99,23 @@ mod tests {
         }
     }
 
-    struct SharedBuffer {
-        data: Rc<RefCell<Vec<u8>>>
-    }
-
-    impl SharedBuffer {
-        pub fn new() -> SharedBuffer {
-            SharedBuffer { data: Rc::new(RefCell::new(Vec::new())) }
-        }
-    }
-
-    impl Write for SharedBuffer {
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-
-        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-            let mut data = self.data.borrow_mut();
-            data.extend_from_slice(buf);
-            Ok(buf.len())
-        }
-    }
-
-    impl Clone for SharedBuffer {
-        fn clone(&self) -> Self {
-            SharedBuffer { data: Rc::clone(&self.data) }
-        }
-    }
-
     #[test]
     fn detailed_advance() {
         let payload = "Hello, world!";
-        let shared_buffer = SharedBuffer::new();
+        let mut buffer: Vec<u8> = Vec::new();
 
         {
-            let writer_box = Box::new(BufWriter::new(shared_buffer.clone())) as Box<dyn Write>;
-            let stream = Rc::new(RefCell::new(writer_box));
-            let packet = Packet::new(payload.as_bytes(), Rc::clone(&stream)).unwrap();
-            match packet.advance() {
+            let mut writer = BufWriter::new(&mut buffer);
+            let packet = Packet::new(payload.as_bytes()).unwrap();
+            match packet.advance(&mut writer) {
                 Packet::Sent => {},
                 _ => { panic!("Unexpected packet state") }
             }
 
             // flush stream
-            stream.borrow_mut().flush().unwrap();
+            writer.flush().unwrap();
         }
 
-        let buffer = shared_buffer.data.borrow_mut();
         assert_eq!(u32::from_be_bytes(buffer[0..4].try_into().unwrap()), payload.len() as u32);
         assert_eq!(&buffer[4..], payload.as_bytes());
     }
@@ -157,13 +124,12 @@ mod tests {
     fn detailed_advance_big_payload() {
         // size of backet is bigger than MAX_SEND_CHUNK so it can't be sent in one advance call
         let payload = "Hello, world!".repeat((MAX_SEND_CHUNK / 13) + 1);
-        let shared_buffer = SharedBuffer::new();
+        let mut buffer: Vec<u8> = Vec::new();
 
         {
-            let writer_box = Box::new(BufWriter::new(shared_buffer.clone())) as Box<dyn Write>;
-            let stream = Rc::new(RefCell::new(writer_box));
-            let packet = Packet::new(payload.as_bytes(), Rc::clone(&stream)).unwrap();
-            let packet = match packet.advance() {
+            let mut writer = BufWriter::new(&mut buffer);
+            let packet = Packet::new(payload.as_bytes()).unwrap();
+            let packet = match packet.advance(&mut writer) {
                 Packet::InProgress(state) => {
                     assert_eq!(state.sent, MAX_SEND_CHUNK);
                     Packet::InProgress(state)
@@ -171,16 +137,15 @@ mod tests {
                 _ => { panic!("Unexpected packet state") }
             };
 
-            match packet.advance() {
+            match packet.advance(&mut writer) {
                 Packet::Sent => {},
                 _ => { panic!("Unexpected packet state") }
             }
 
             // flush stream
-            stream.borrow_mut().flush().unwrap();
+            writer.flush().unwrap();
         }
 
-        let buffer = shared_buffer.data.borrow_mut();
         assert_eq!(u32::from_be_bytes(buffer[0..4].try_into().unwrap()), payload.len() as u32);
         assert_eq!(&buffer[4..], payload.as_bytes());
     }
