@@ -37,40 +37,42 @@ impl PacketInProgress {
                 if error.kind() == std::io::ErrorKind::WouldBlock {
                     (Packet::InProgress(self), 0)
                 } else {
-                    (Packet::Failed(SendPacketError::StreamError(error)), 0)
+                    (Packet::Failed(PacketError::StreamError(error)), 0)
                 }
             }
         }
     }
 }
 
-pub enum SendPacketError {
+#[derive(Debug)]
+pub enum PacketError {
+    ZeroSizedPacket,
     StreamError(std::io::Error),
 }
 
 pub enum Packet {
     InProgress(PacketInProgress),
     Sent,
-    Failed(SendPacketError),
+    Failed(PacketError),
 }
 
 impl Packet {
-    pub fn new(bytes: &[u8]) -> ChatResult<Packet> {
+    pub fn new(bytes: &[u8]) -> Packet {
         if bytes.len() == 0 {
-            return Err(ChatError("Trying to send an empty packet".to_string()));
+            return Packet::Failed(PacketError::ZeroSizedPacket)
         }
 
         let mut data = Vec::new() as Vec<u8>;
         data.reserve(bytes.len() + 4);
 
         let len = bytes.len() as i32;
-        data.extend_from_slice(&len.to_be_bytes());
+        data.extend_from_slice(&len.to_le_bytes());
         data.extend_from_slice(bytes);
 
-        Ok(Packet::InProgress(PacketInProgress {
+        Packet::InProgress(PacketInProgress {
             data: data,
             sent: 0,
-        }))
+        })
     }
 
     pub fn advance<Stream>(self, stream: &mut Stream) -> Packet
@@ -146,7 +148,7 @@ mod tests {
     #[test]
     fn create_new_packet() {
         let payload = "Hello, world!";
-        let packet = Packet::new(payload.as_bytes()).unwrap();
+        let packet = Packet::new(payload.as_bytes());
         if let Packet::InProgress(in_progress) = packet {
             assert_eq!(in_progress.sent, 0);
         } else {
@@ -161,7 +163,7 @@ mod tests {
 
         {
             let mut writer = BufWriter::new(&mut buffer);
-            let packet = Packet::new(payload.as_bytes()).unwrap();
+            let packet = Packet::new(payload.as_bytes());
             match packet.advance(&mut writer) {
                 Packet::Sent => {}
                 _ => {
@@ -188,7 +190,7 @@ mod tests {
 
         {
             let mut writer = BufWriter::new(&mut buffer);
-            let packet = Packet::new(payload.as_bytes()).unwrap();
+            let packet = Packet::new(payload.as_bytes());
             let packet = match packet.advance(&mut writer) {
                 Packet::InProgress(state) => {
                     assert_eq!(state.sent, MAX_SEND_CHUNK);
@@ -226,7 +228,7 @@ mod tests {
             let mut buffer: Vec<u8> = Vec::new();
             {
                 let mut writer = BufWriter::new(&mut buffer);
-                let packet = Packet::new(payload.as_bytes()).unwrap();
+                let packet = Packet::new(payload.as_bytes());
                 match packet.advance_until_sent(&mut writer) {
                     Packet::Sent => {}
                     _ => {
@@ -279,7 +281,7 @@ mod tests {
                 .set_nonblocking(true)
                 .expect("Can't make stream nonblocking");
             
-            let packet = Packet::new(payload.as_bytes()).unwrap();
+            let packet = Packet::new(payload.as_bytes());
             match packet.advance_until_sent(&mut stream) {
                 Packet::Sent => {}
                 _ => {

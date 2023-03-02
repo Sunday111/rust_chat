@@ -8,42 +8,46 @@ pub struct PacketReadingSize {
 }
 
 impl PacketReadingSize {
-    fn advance<T>(mut self, stream: &mut T) -> Packet
+    fn advance<T>(mut self, stream: &mut T) -> (Packet, usize)
     where
         T: Read,
     {
-        if self.read < 4 {
-            let remaining_buf = unsafe {
-                let pointer = (&mut self.size as *mut _ as *mut u8).add(self.read);
-                std::slice::from_raw_parts_mut(pointer, 4 - self.read)
-            };
-            match stream.read(remaining_buf) {
-                Ok(bytes_read) => {
-                    if bytes_read == 0 {
-                        return Packet::Failed(PacketError::StreamClosed);
-                    }
-
-                    assert!(self.read + bytes_read <= 4);
-                    self.read += bytes_read;
-                    Packet::Size(self)
+        assert!(self.read < 4);
+        let remaining_buf = unsafe {
+            let pointer = (&mut self.size as *mut _ as *mut u8).add(self.read);
+            std::slice::from_raw_parts_mut(pointer, 4 - self.read)
+        };
+        match stream.read(remaining_buf) {
+            Ok(bytes_read) => {
+                if bytes_read == 0 {
+                    println!("zero bytes");
+                    return (Packet::Failed(PacketError::StreamClosed), 0);
                 }
-                Err(error) => {
-                    if error.kind() == std::io::ErrorKind::WouldBlock {
-                        Packet::Size(self)
-                    } else {
-                        Packet::Failed(PacketError::StreamError)
+
+                assert!(self.read + bytes_read <= 4);
+                self.read += bytes_read;
+
+                if self.read == 4 {
+                    if self.size >= MAX_PACKET_SIZE {
+                        return (Packet::Failed(PacketError::SizeTooBig(self.size as usize)), bytes_read)
                     }
+                    println!("Incoming packet size: {} bytes", self.size);
+                    (Packet::InProgress(PacketInProgress {
+                        received: 0,
+                        data: vec![0; self.size as usize],
+                    }), bytes_read)
+                } else {
+                    (Packet::Size(self), bytes_read)
                 }
             }
-        } else {
-            if self.size > MAX_PACKET_SIZE {
-                return Packet::Failed(PacketError::SizeTooBig(self.size as usize));
+            Err(error) => {
+                if error.kind() == std::io::ErrorKind::WouldBlock {
+                    (Packet::Size(self), 0)
+                } else {
+                    println!("{error:#?}");
+                    (Packet::Failed(PacketError::StreamError), 0)
+                }
             }
-
-            Packet::InProgress(PacketInProgress {
-                received: 0,
-                data: vec![0; self.size as usize],
-            })
         }
     }
 }
@@ -61,7 +65,7 @@ impl PacketInProgress {
         T: Read,
     {
         if self.received == self.data.len() {
-            return (Packet::Complete(self.data), 0);
+            return (Packet::Received(self.data), 0);
         }
 
         let slice = unsafe {
@@ -72,6 +76,7 @@ impl PacketInProgress {
         match stream.read(slice) {
             Ok(bytes_read) => {
                 if bytes_read == 0 {
+                    println!("zero bytes received");
                     return (Packet::Failed(PacketError::StreamClosed), 0);
                 }
 
@@ -81,13 +86,14 @@ impl PacketInProgress {
                     return (Packet::InProgress(self), bytes_read);
                 }
 
-                return (Packet::Complete(self.data), bytes_read);
+                return (Packet::Received(self.data), bytes_read);
             }
             Err(error) => {
                 if error.kind() == std::io::ErrorKind::WouldBlock {
                     return (Packet::InProgress(self), 0);
                 }
 
+                println!("{error:#?}");
                 (Packet::Failed(PacketError::StreamError), 0)
             }
         }
@@ -109,7 +115,7 @@ pub enum Packet {
     InProgress(PacketInProgress),
 
     // Packet was read successfully
-    Complete(Vec<u8>),
+    Received(Vec<u8>),
 
     // Failed to read the packet
     Failed(PacketError),
@@ -125,14 +131,14 @@ impl Packet {
         T: Read,
     {
         match self {
-            Packet::Size(state) => state.advance(stream),
+            Packet::Size(state) => state.advance(stream).0,
             Packet::InProgress(state) => state.advance(stream).0,
-            Packet::Complete(_) => self,
+            Packet::Received(_) => self,
             Packet::Failed(_) => self,
         }
     }
 
-    pub fn advance_to_complete<T>(self, stream: &mut T) -> Packet
+    pub fn advance_until_received<T>(self, stream: &mut T) -> Packet
     where
         T: Read,
     {
@@ -140,14 +146,15 @@ impl Packet {
         let mut finished = false;
         while !finished {
             packet = match packet {
-                Packet::Size(state) => state.advance(stream),
+                Packet::Size(state) => state.advance(stream).0,
                 Packet::InProgress(state) => state.advance(stream).0,
-                Packet::Complete(data) => {
+                Packet::Received(data) => {
                     finished = true;
-                    Packet::Complete(data)
+                    Packet::Received(data)
                 }
                 Packet::Failed(err) => {
                     finished = true;
+                    println!("{err:#?}");
                     Packet::Failed(err)
                 }
             }
@@ -164,7 +171,13 @@ impl Packet {
         let mut finished = false;
         while !finished {
             packet = match packet {
-                Packet::Size(state) => state.advance(stream),
+                Packet::Size(state) => {
+                    let (new_state, read_count) = state.advance(stream);
+                    if read_count == 0 {
+                        finished = true;
+                    }
+                    new_state
+                },
                 Packet::InProgress(state) => {
                     let (new_state, read_count) = state.advance(stream);
                     if read_count == 0 {
@@ -172,12 +185,13 @@ impl Packet {
                     }
                     new_state
                 }
-                Packet::Complete(data) => {
+                Packet::Received(data) => {
                     finished = true;
-                    Packet::Complete(data)
+                    Packet::Received(data)
                 }
                 Packet::Failed(err) => {
                     finished = true;
+                    println!("{err:#?}");
                     Packet::Failed(err)
                 }
             }
@@ -197,7 +211,7 @@ mod tests {
     use std::io::{BufReader, Write};
 
     #[test]
-    fn detailed_packet_progress() {
+    fn advance_detailed() {
         let payload = "Hello, world!";
         let buffer = make_buffer_for_packet(payload);
         let mut reader = BufReader::new(&buffer[..]);
@@ -237,7 +251,7 @@ mod tests {
 
         let packet = packet.advance(&mut reader);
         match packet {
-            Packet::Complete(data) => {
+            Packet::Received(data) => {
                 assert_eq!(data.len(), payload.len());
                 assert_eq!(
                     String::from_utf8(data).expect("Failed to make a string from buffer"),
@@ -251,13 +265,13 @@ mod tests {
     }
 
     #[test]
-    fn advance_blocking() {
+    fn advance_until_received() {
         let payload = "Example string";
         let buffer = make_buffer_for_packet(&payload);
         let mut reader = BufReader::new(&buffer[..]);
-        let packet = Packet::new().advance_to_complete(&mut reader);
+        let packet = Packet::new().advance_until_received(&mut reader);
 
-        if let Packet::Complete(data) = packet {
+        if let Packet::Received(data) = packet {
             assert_eq!(data.len(), payload.len());
             assert_eq!(
                 String::from_utf8(data).expect("Failed to make a string from buffer"),
@@ -279,7 +293,7 @@ mod tests {
         };
         let mut reader = BufReader::new(&buffer[..]);
 
-        if let Packet::Complete(data) = Packet::new().advance_to_complete(&mut reader) {
+        if let Packet::Received(data) = Packet::new().advance_until_received(&mut reader) {
             assert_eq!(data.len(), payload_a.len());
             assert_eq!(
                 String::from_utf8(data).expect("Failed to make a string from buffer"),
@@ -289,7 +303,7 @@ mod tests {
             panic!("Unexpected state of packet");
         }
 
-        if let Packet::Complete(data) = Packet::new().advance_to_complete(&mut reader) {
+        if let Packet::Received(data) = Packet::new().advance_until_received(&mut reader) {
             assert_eq!(data.len(), payload_b.len());
             assert_eq!(
                 String::from_utf8(data).expect("Failed to make a string from buffer"),
@@ -306,7 +320,7 @@ mod tests {
         let buffer = make_buffer_for_packet(&payload);
         let mut reader = BufReader::new(&buffer[0..5]);
 
-        if let Packet::Failed(error) = Packet::new().advance_to_complete(&mut reader) {
+        if let Packet::Failed(error) = Packet::new().advance_until_received(&mut reader) {
             assert_eq!(error, PacketError::StreamClosed {});
         } else {
             panic!("Unexpected state of packet");
@@ -314,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn progress_loop_from_tcp() {
+    fn advance_until_received_tcp() {
         let payload = generate_random_string(1234, 2000, 10000);
         let address = next_localhost_address();
 
@@ -359,9 +373,9 @@ mod tests {
                 .set_nonblocking(true)
                 .expect("Can't make stream nonblocking");
             let mut reader = BufReader::new(stream);
-            let packet = Packet::new().advance_to_complete(&mut reader);
+            let packet = Packet::new().advance_until_received(&mut reader);
 
-            if let Packet::Complete(data) = packet {
+            if let Packet::Received(data) = packet {
                 assert_eq!(data.len(), payload.len());
                 assert_eq!(
                     String::from_utf8(data).expect("Failed to make a string from buffer"),
