@@ -12,10 +12,12 @@ pub struct LoginInfo {
 
 pub fn try_connect(connection_info: ConnectionInfo) -> Client {
     match TcpStream::connect(&connection_info.address) {
-        Ok(stream) => Client::Connected(ConnectedState {
+        Ok(stream) =>{
+            stream.set_nonblocking(true).expect("Failed to make stream non-blocking");
+            Client::Connected(ConnectedState {
             connection_info: connection_info,
             stream: stream,
-        }),
+        })},
         Err(err) => Client::ConnectionFailed(ConnectionFailedState {
             connection_info: connection_info,
             reason: err.to_string(),
@@ -37,7 +39,7 @@ impl WaitingForConnectionInfoState {
     pub fn new() -> WaitingForConnectionInfoState {
         WaitingForConnectionInfoState {
             connection_info: ConnectionInfo {
-                address: "".to_string(),
+                address: "127.0.0.1:8787".to_string(),
             },
         }
     }
@@ -46,8 +48,8 @@ impl WaitingForConnectionInfoState {
 //---------------------------------------------------------------------------------------------------
 
 pub struct ConnectionFailedState {
-    connection_info: ConnectionInfo,
-    reason: String,
+    pub connection_info: ConnectionInfo,
+    pub reason: String,
 }
 
 impl ConnectionFailedState {
@@ -64,8 +66,8 @@ pub struct ConnectedState {
 }
 
 impl ConnectedState {
-    pub fn begin_login(mut self) -> Client {
-        Client::WaitingForLoginInfo(WaitingForLoginDataState {
+    pub fn begin_login(self) -> Client {
+        Client::WaitingForLoginInfo(WaitingForLoginInfoState {
             connection_info: self.connection_info,
             login_info: LoginInfo {
                 user: "".to_string(),
@@ -78,14 +80,14 @@ impl ConnectedState {
 
 //---------------------------------------------------------------------------------------------------
 
-pub struct WaitingForLoginDataState {
-    connection_info: ConnectionInfo,
+pub struct WaitingForLoginInfoState {
+    pub connection_info: ConnectionInfo,
     pub login_info: LoginInfo,
-    stream: TcpStream,
-    sender: PacketSender,
+    pub stream: TcpStream,
+    pub sender: PacketSender,
 }
 
-impl WaitingForLoginDataState {
+impl WaitingForLoginInfoState {
     pub fn login(mut self) -> Client {
         let login_message = &format!("{{ \"username\": \"{}\" }}", self.login_info.user);
         let mut data = Vec::new();
@@ -109,6 +111,7 @@ impl WaitingForLoginDataState {
             sender: PacketSender::new(),
             receiver: PacketReceiver::new(),
             current_input: String::new(),
+            received_messages: Vec::new(),
         })
     }
 }
@@ -122,14 +125,15 @@ pub struct LoggedInState {
     sender: PacketSender,
     receiver: PacketReceiver,
     pub current_input: String,
+    pub received_messages: Vec<String>
 }
 
 impl LoggedInState {
-    pub fn send_message(&mut self, message: String) {
-        self.sender.add_to_send_queue(Vec::from(message.as_bytes()));
+    pub fn send_message(&mut self) {
+        self.sender.add_to_send_queue(Vec::from(self.current_input.as_bytes()));
     }
 
-    pub fn take_message(&mut self) -> Option<String> {
+    fn take_message(&mut self) -> Option<String> {
         if let Some(packet) = self.receiver.pop_packet() {
             Some(String::from_utf8(packet).expect(""))
         } else {
@@ -154,6 +158,10 @@ impl LoggedInState {
             });
         }
 
+        while let Some(data) = self.take_message() {
+            self.received_messages.push(data);
+        }
+
         Client::LoggedIn(self)
     }
 }
@@ -161,17 +169,17 @@ impl LoggedInState {
 //---------------------------------------------------------------------------------------------------
 
 pub struct LoginFailedState {
-    connection_info: ConnectionInfo,
-    login_info: LoginInfo,
-    reason: String,
+    pub connection_info: ConnectionInfo,
+    pub login_info: LoginInfo,
+    pub reason: String,
 }
 
 //---------------------------------------------------------------------------------------------------
 
 pub struct DisconnectedState {
-    connection_info: ConnectionInfo,
-    login_info: LoginInfo,
-    reason: String,
+    pub connection_info: ConnectionInfo,
+    pub login_info: LoginInfo,
+    pub reason: String,
 }
 
 //---------------------------------------------------------------------------------------------------
@@ -179,7 +187,7 @@ pub struct DisconnectedState {
 pub enum Client {
     WaitingForConnectionInfo(WaitingForConnectionInfoState),
     Connected(ConnectedState),
-    WaitingForLoginInfo(WaitingForLoginDataState),
+    WaitingForLoginInfo(WaitingForLoginInfoState),
     ConnectionFailed(ConnectionFailedState),
     LoggedIn(LoggedInState),
     LoginFailed(LoginFailedState),

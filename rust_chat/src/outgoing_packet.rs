@@ -1,8 +1,5 @@
-use crate::{ChatError, ChatResult};
-use std::cell::RefCell;
 use std::fmt::Display;
 use std::io::Write;
-use std::rc::Rc;
 
 pub struct PacketInProgress {
     data: Vec<u8>,
@@ -151,7 +148,7 @@ impl Packet {
 mod tests {
     use super::*;
     use crate::test_utils::{
-        generate_random_string, make_buffer_for_packet, next_localhost_address,
+        generate_random_string, next_localhost_address,
     };
     use std::io::{BufWriter, Write, Read};
 

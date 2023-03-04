@@ -47,6 +47,6 @@ impl PacketSender {
     }
 
     pub fn empty(&self) -> bool {
-        self.current.is_none() && self.send_queue.len() > 0
+        self.current.is_none() && self.send_queue.len() == 0
     }
 }

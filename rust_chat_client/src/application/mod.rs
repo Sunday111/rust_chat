@@ -16,7 +16,7 @@ impl Default for Application {
 }
 
 impl eframe::App for Application {
-    fn update(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.client = Some(match self.client.take().unwrap() {
                 Client::WaitingForConnectionInfo(mut state) => {
@@ -31,7 +31,7 @@ impl eframe::App for Application {
                     } else {
                         Client::WaitingForConnectionInfo(state)
                     }
-                },
+                }
                 Client::Connected(mut state) => {
                     ui.heading("Connection info");
                     ui.horizontal(|ui| {
@@ -40,7 +40,7 @@ impl eframe::App for Application {
                             .labelled_by(address_label.id);
                     });
                     state.begin_login()
-                },
+                }
                 Client::WaitingForLoginInfo(mut state) => {
                     ui.heading("Login info");
                     ui.horizontal(|ui| {
@@ -53,31 +53,67 @@ impl eframe::App for Application {
                     } else {
                         Client::WaitingForLoginInfo(state)
                     }
-                },
+                }
                 Client::ConnectionFailed(state) => {
-                    panic!("Connection failed");
-                    Client::ConnectionFailed(state)
-                },
-                Client::LoggedIn(mut state) => {
-                    ui.heading("Connection info");
-                    ui.horizontal(|ui| {
-                        let address_label = ui.label("Server address: ");
-                        ui.text_edit_singleline(&mut state.current_input)
-                            .labelled_by(address_label.id);
-                    });
-                    if ui.button("Send").clicked() {
-                        state.current_input.clear();
+                    ui.heading("Login failed");
+                    ui.colored_label(egui::Color32::RED, state.reason.to_string());
+                    if ui.button("To connection page").clicked() {
+                        Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
+                            connection_info: state.connection_info,
+                        })
+                    } else {
+                        Client::ConnectionFailed(state)
                     }
-                    Client::LoggedIn(state)
-                },
+                }
+                Client::LoggedIn(mut state) => {
+                    ui.heading("Welcome");
+                    let scroll_area = egui::ScrollArea::vertical()
+                        .max_height(200.0)
+                        .auto_shrink([false; 2]);
+                    scroll_area
+                        .show(ui, |ui| {
+                            ui.vertical(|ui| {
+                                for message in &state.received_messages {
+                                    ui.colored_label(egui::Color32::YELLOW, message);
+                                }
+                            });
+                        })
+                        .inner;
+
+                    ui.horizontal(|ui| {
+                        let message_label = ui.label("Message: ");
+                        ui.text_edit_singleline(&mut state.current_input)
+                            .labelled_by(message_label.id);
+                        if ui.button("Send").clicked() {
+                            state.send_message();
+                            state.current_input.clear();
+                        }
+                    });
+
+                    state.tick()
+                }
                 Client::LoginFailed(state) => {
-                    panic!("Connection failed");
-                    Client::LoginFailed(state)
-                },
+                    ui.heading("Login failed");
+                    ui.colored_label(egui::Color32::RED, state.reason.to_string());
+                    if ui.button("To connection page").clicked() {
+                        Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
+                            connection_info: state.connection_info,
+                        })
+                    } else {
+                        Client::LoginFailed(state)
+                    }
+                }
                 Client::Disconnected(state) => {
-                    panic!("Connection failed");
-                    Client::Disconnected(state)
-                },
+                    ui.heading("Login failed");
+                    ui.colored_label(egui::Color32::RED, state.reason.to_string());
+                    if ui.button("To connection page").clicked() {
+                        Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
+                            connection_info: state.connection_info,
+                        })
+                    } else {
+                        Client::Disconnected(state)
+                    }
+                }
             });
         });
     }
