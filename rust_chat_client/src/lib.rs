@@ -1,5 +1,9 @@
 use std::io::{self, BufRead, Write};
 
+pub mod application;
+pub mod command;
+pub mod client;
+
 pub fn run_app() {
     let stdin = io::stdin();
 

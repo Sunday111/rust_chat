@@ -45,4 +45,8 @@ impl PacketSender {
     pub fn add_to_send_queue(&mut self, data: Vec<u8>) {
         self.send_queue.push_back(data);
     }
+
+    pub fn empty(&self) -> bool {
+        self.current.is_none() && self.send_queue.len() > 0
+    }
 }

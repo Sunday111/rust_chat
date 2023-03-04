@@ -1,4 +1,5 @@
 use std::io::Read;
+use std::fmt::Display;
 
 const MAX_PACKET_SIZE: u32 = 65536;
 
@@ -105,6 +106,16 @@ pub enum PacketError {
     StreamError,
     StreamClosed,
     SizeTooBig(usize),
+}
+
+impl Display for PacketError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::StreamError => write!(f, "Stream error happened"),
+            Self::StreamClosed => write!(f, "Stream closed"),
+            Self::SizeTooBig(size) => write!(f, "Packet too big ({size})"),
+        }
+    }
 }
 
 pub enum Packet {

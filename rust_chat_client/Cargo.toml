@@ -7,3 +7,6 @@ edition = "2021"
 
 [dependencies]
 rust_chat = { path = "../rust_chat" }
+egui = "*"
+tracing-subscriber = "0.3"
+eframe = "*"

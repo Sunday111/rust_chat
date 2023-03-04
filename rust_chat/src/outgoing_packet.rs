@@ -1,5 +1,6 @@
 use crate::{ChatError, ChatResult};
 use std::cell::RefCell;
+use std::fmt::Display;
 use std::io::Write;
 use std::rc::Rc;
 
@@ -48,6 +49,15 @@ impl PacketInProgress {
 pub enum PacketError {
     ZeroSizedPacket,
     StreamError(std::io::Error),
+}
+
+impl Display for PacketError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::ZeroSizedPacket => write!(f, "Attempt to send zero-sized packet"),
+            Self::StreamError(err) => write!(f, "stream error: {err}"),
+        }
+    }
 }
 
 pub enum Packet {
