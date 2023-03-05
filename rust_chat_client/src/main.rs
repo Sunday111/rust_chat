@@ -12,7 +12,7 @@ fn main() -> Result<(), eframe::Error> {
         ..Default::default()
     };
     eframe::run_native(
-        "My egui App",
+        "Rust Chat",
         options,
         Box::new(|_cc| Box::new(Application::default())),
     )

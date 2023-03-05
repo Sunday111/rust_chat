@@ -25,19 +25,15 @@ pub struct WaitingForConnectionInfoState {
 
 impl WaitingForConnectionInfoState {
     pub fn connect(self) -> Client {
-        let connection_info = match std::net::SocketAddr::from_str(&self.address) {
-            Ok(address) =>
+        if let Ok(address) = std::net::SocketAddr::from_str(&self.address) {
+            let connection_info =
                 ConnectionInfo {
                     address: address
-                },
-            Err(err) => {
-                return Client::WaitingForConnectionInfo(WaitingForConnectionInfoState{
-                    address: self.address
-                })
-            }
-        };
-
-        try_connect(connection_info)
+                };
+            try_connect(connection_info)
+        } else {
+            Client::WaitingForConnectionInfo(self)
+        }
     }
 
     pub fn new() -> WaitingForConnectionInfoState {
@@ -132,7 +128,10 @@ pub struct LoggedInState {
 
 impl LoggedInState {
     pub fn send_message(&mut self) {
-        self.sender.add_to_send_queue(Vec::from(self.current_input.as_bytes()));
+        if !self.current_input.is_empty() {
+            self.sender.add_to_send_queue(Vec::from(self.current_input.as_bytes()));
+            self.current_input.clear();
+        }
     }
 
     fn take_message(&mut self) -> Option<String> {
