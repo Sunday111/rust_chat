@@ -1,14 +1,6 @@
-use std::net::TcpStream;
+use std::{net::TcpStream, str::FromStr};
 
-use rust_chat::{PacketReceiver, PacketSender};
-
-pub struct ConnectionInfo {
-    pub address: String,
-}
-
-pub struct LoginInfo {
-    pub user: String,
-}
+use rust_chat::{PacketReceiver, PacketSender, ConnectionInfo, LoginInfo};
 
 pub fn try_connect(connection_info: ConnectionInfo) -> Client {
     match TcpStream::connect(&connection_info.address) {
@@ -28,19 +20,29 @@ pub fn try_connect(connection_info: ConnectionInfo) -> Client {
 //---------------------------------------------------------------------------------------------------
 
 pub struct WaitingForConnectionInfoState {
-    pub connection_info: ConnectionInfo,
+    pub address: String,
 }
 
 impl WaitingForConnectionInfoState {
     pub fn connect(self) -> Client {
-        try_connect(self.connection_info)
+        let connection_info = match std::net::SocketAddr::from_str(&self.address) {
+            Ok(address) =>
+                ConnectionInfo {
+                    address: address
+                },
+            Err(err) => {
+                return Client::WaitingForConnectionInfo(WaitingForConnectionInfoState{
+                    address: self.address
+                })
+            }
+        };
+
+        try_connect(connection_info)
     }
 
     pub fn new() -> WaitingForConnectionInfoState {
         WaitingForConnectionInfoState {
-            connection_info: ConnectionInfo {
-                address: "127.0.0.1:8787".to_string(),
-            },
+            address: "127.0.0.1:8787".to_string(),
         }
     }
 }

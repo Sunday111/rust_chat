@@ -1,3 +1,5 @@
+use std::str::FromStr;
+
 use crate::client::Client;
 use crate::client::WaitingForConnectionInfoState;
 
@@ -23,22 +25,19 @@ impl eframe::App for Application {
                     ui.heading("Connection info");
                     ui.horizontal(|ui| {
                         let name_label = ui.label("Server address: ");
-                        ui.text_edit_singleline(&mut state.connection_info.address)
+                        ui.text_edit_singleline(&mut state.address)
                             .labelled_by(name_label.id);
                     });
-                    if ui.button("Connect").clicked() {
+                    let can_parse_address = std::net::SocketAddr::from_str(&state.address).is_ok();
+                    let connect_button = ui.add_enabled(can_parse_address, egui::Button::new("Connect"));
+                    if connect_button.clicked() {
                         state.connect()
                     } else {
                         Client::WaitingForConnectionInfo(state)
                     }
                 }
-                Client::Connected(mut state) => {
-                    ui.heading("Connection info");
-                    ui.horizontal(|ui| {
-                        let address_label = ui.label("Server address: ");
-                        ui.text_edit_singleline(&mut state.connection_info.address)
-                            .labelled_by(address_label.id);
-                    });
+                Client::Connected(state) => {
+                    ui.heading("Connected");
                     state.begin_login()
                 }
                 Client::WaitingForLoginInfo(mut state) => {
@@ -59,7 +58,7 @@ impl eframe::App for Application {
                     ui.colored_label(egui::Color32::RED, state.reason.to_string());
                     if ui.button("To connection page").clicked() {
                         Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
-                            connection_info: state.connection_info,
+                            address: state.connection_info.address.to_string(),
                         })
                     } else {
                         Client::ConnectionFailed(state)
@@ -97,7 +96,7 @@ impl eframe::App for Application {
                     ui.colored_label(egui::Color32::RED, state.reason.to_string());
                     if ui.button("To connection page").clicked() {
                         Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
-                            connection_info: state.connection_info,
+                            address: state.connection_info.address.to_string(),
                         })
                     } else {
                         Client::LoginFailed(state)
@@ -108,7 +107,7 @@ impl eframe::App for Application {
                     ui.colored_label(egui::Color32::RED, state.reason.to_string());
                     if ui.button("To connection page").clicked() {
                         Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
-                            connection_info: state.connection_info,
+                            address: state.connection_info.address.to_string(),
                         })
                     } else {
                         Client::Disconnected(state)

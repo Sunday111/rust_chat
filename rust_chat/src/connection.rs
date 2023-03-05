@@ -10,6 +10,14 @@ type IncomingPacketError = crate::incoming_packet::PacketError;
 type OutgoingPacket = crate::outgoing_packet::Packet;
 type OutgoingPacketError = crate::outgoing_packet::PacketError;
 
+pub struct ConnectionInfo {
+    pub address: std::net::SocketAddr,
+}
+
+pub struct LoginInfo {
+    pub user: String,
+}
+
 /* Just created connection.
  * Message with handshake data has not been accepted yet
  */
@@ -42,8 +50,11 @@ impl HandshakeState {
                     Ok(message) => {
                         println!("New connection with username: {}", message.username);
                         Connection::Established(EstablishedConnection {
-                            info: ConnectionInfo {
-                                username: message.username,
+                            connection_info: ConnectionInfo {
+                                address: self.stream.peer_addr().expect("Failed to get peer address")
+                            },
+                            login_info: LoginInfo {
+                                user: message.username,
                             },
                             stream: self.stream,
                             sender: PacketSender::new(),
@@ -80,11 +91,9 @@ impl HandshakeState {
 
 /* Initialized and accepted connection
  */
-struct ConnectionInfo {
-    username: String,
-}
 pub struct EstablishedConnection {
-    info: ConnectionInfo,
+    connection_info: ConnectionInfo,
+    login_info: LoginInfo,
     stream: TcpStream,
 
     sender: PacketSender,

@@ -15,3 +15,5 @@ pub use chat_result::ConvertibleToChatResult;
 pub use connection::Connection;
 pub use packet_receiver::PacketReceiver;
 pub use packet_sender::PacketSender;
+pub use connection::ConnectionInfo;
+pub use connection::LoginInfo;
