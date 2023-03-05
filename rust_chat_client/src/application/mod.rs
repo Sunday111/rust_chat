@@ -22,14 +22,22 @@ impl eframe::App for Application {
         egui::CentralPanel::default().show(ctx, |ui| {
             self.client = Some(match self.client.take().unwrap() {
                 Client::WaitingForConnectionInfo(mut state) => {
+                    let can_parse_address = std::net::SocketAddr::from_str(&state.address).is_ok();
                     ui.heading("Connection info");
                     ui.horizontal(|ui| {
                         let name_label = ui.label("Server address: ");
                         ui.text_edit_singleline(&mut state.address)
                             .labelled_by(name_label.id);
+
+                        if !can_parse_address {
+                            let error_text =
+                                egui::RichText::new("Inavlid address").color(egui::Color32::RED);
+                            ui.label(error_text);
+                        }
                     });
-                    let can_parse_address = std::net::SocketAddr::from_str(&state.address).is_ok();
-                    let connect_button = ui.add_enabled(can_parse_address, egui::Button::new("Connect"));
+
+                    let connect_button =
+                        ui.add_enabled(can_parse_address, egui::Button::new("Connect"));
                     if connect_button.clicked() {
                         state.connect()
                     } else {
