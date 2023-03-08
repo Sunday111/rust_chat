@@ -24,6 +24,15 @@ impl Application {
         ctx: &egui::Context,
         mut state: WaitingForConnectionInfoState,
     ) -> Client {
+        if let Some(prev_err) = &state.previous_error {
+            egui::TopBottomPanel::bottom("bottom_panel")
+                .resizable(false)
+                .min_height(0.0)
+                .show(ctx, |ui| {
+                    ui.label(egui::RichText::new(prev_err).color(egui::Color32::RED));
+                });
+        }
+
         egui::CentralPanel::default()
             .show(ctx, |ui| {
                 let can_parse_address = std::net::SocketAddr::from_str(&state.address).is_ok();
@@ -116,19 +125,10 @@ impl eframe::App for Application {
                     .inner
             }
             Client::ConnectionFailed(state) => {
-                egui::CentralPanel::default()
-                    .show(ctx, |ui| {
-                        ui.heading("Login failed");
-                        ui.colored_label(egui::Color32::RED, state.reason.to_string());
-                        if ui.button("To connection page").clicked() {
-                            Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
-                                address: state.connection_info.address.to_string(),
-                            })
-                        } else {
-                            Client::ConnectionFailed(state)
-                        }
-                    })
-                    .inner
+                Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
+                    address: state.connection_info.address.to_string(),
+                    previous_error: Some(state.reason),
+                })
             }
             Client::LoggedIn(state) => self.chat_page(ctx, state),
             Client::LoginFailed(state) => {
@@ -139,6 +139,7 @@ impl eframe::App for Application {
                         if ui.button("To connection page").clicked() {
                             Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
                                 address: state.connection_info.address.to_string(),
+                                previous_error: None,
                             })
                         } else {
                             Client::LoginFailed(state)
@@ -154,6 +155,7 @@ impl eframe::App for Application {
                         if ui.button("To connection page").clicked() {
                             Client::WaitingForConnectionInfo(WaitingForConnectionInfoState {
                                 address: state.connection_info.address.to_string(),
+                                previous_error: None,
                             })
                         } else {
                             Client::Disconnected(state)

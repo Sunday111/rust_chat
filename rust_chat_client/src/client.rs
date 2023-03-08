@@ -26,6 +26,7 @@ pub fn try_connect(connection_info: ConnectionInfo) -> Client {
 
 pub struct WaitingForConnectionInfoState {
     pub address: String,
+    pub previous_error: Option<String>,
 }
 
 impl WaitingForConnectionInfoState {
@@ -41,6 +42,7 @@ impl WaitingForConnectionInfoState {
     pub fn new() -> WaitingForConnectionInfoState {
         WaitingForConnectionInfoState {
             address: "127.0.0.1:8787".to_string(),
+            previous_error: None,
         }
     }
 }
@@ -50,12 +52,6 @@ impl WaitingForConnectionInfoState {
 pub struct ConnectionFailedState {
     pub connection_info: ConnectionInfo,
     pub reason: String,
-}
-
-impl ConnectionFailedState {
-    pub fn retry(self) -> Client {
-        try_connect(self.connection_info)
-    }
 }
 
 //---------------------------------------------------------------------------------------------------
