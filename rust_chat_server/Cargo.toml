@@ -7,3 +7,6 @@ edition = "2021"
 
 [dependencies]
 rust_chat = { path = "../rust_chat" }
+serde = "*"
+serde_derive = "*"
+serde_json = "*"

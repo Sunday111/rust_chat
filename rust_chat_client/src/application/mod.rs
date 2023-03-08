@@ -72,7 +72,11 @@ impl Application {
                 .show(ui, |ui| {
                     ui.vertical(|ui| {
                         for message in &state.received_messages {
-                            ui.colored_label(egui::Color32::YELLOW, message);
+                            ui.horizontal(|ui| {
+                                ui.colored_label(egui::Color32::GREEN, &message.username);
+                                ui.separator();
+                                ui.colored_label(egui::Color32::WHITE, &message.text);
+                            });
                         }
                     });
                 });

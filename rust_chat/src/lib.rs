@@ -17,3 +17,5 @@ pub use packet_receiver::PacketReceiver;
 pub use packet_sender::PacketSender;
 pub use connection::ConnectionInfo;
 pub use connection::LoginInfo;
+pub use connection::MesasgeFromUser;
+pub use connection::CommandType;

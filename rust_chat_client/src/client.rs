@@ -1,15 +1,20 @@
-use std::{net::TcpStream, str::FromStr};
+use std::{net::TcpStream, str::FromStr, mem::swap};
 
-use rust_chat::{PacketReceiver, PacketSender, ConnectionInfo, LoginInfo};
+use rust_chat::{
+    CommandType, ConnectionInfo, LoginInfo, MesasgeFromUser, PacketReceiver, PacketSender,
+};
 
 pub fn try_connect(connection_info: ConnectionInfo) -> Client {
     match TcpStream::connect(&connection_info.address) {
-        Ok(stream) =>{
-            stream.set_nonblocking(true).expect("Failed to make stream non-blocking");
+        Ok(stream) => {
+            stream
+                .set_nonblocking(true)
+                .expect("Failed to make stream non-blocking");
             Client::Connected(ConnectedState {
-            connection_info: connection_info,
-            stream: stream,
-        })},
+                connection_info: connection_info,
+                stream: stream,
+            })
+        }
         Err(err) => Client::ConnectionFailed(ConnectionFailedState {
             connection_info: connection_info,
             reason: err.to_string(),
@@ -26,10 +31,7 @@ pub struct WaitingForConnectionInfoState {
 impl WaitingForConnectionInfoState {
     pub fn connect(self) -> Client {
         if let Ok(address) = std::net::SocketAddr::from_str(&self.address) {
-            let connection_info =
-                ConnectionInfo {
-                    address: address
-                };
+            let connection_info = ConnectionInfo { address: address };
             try_connect(connection_info)
         } else {
             Client::WaitingForConnectionInfo(self)
@@ -123,15 +125,36 @@ pub struct LoggedInState {
     sender: PacketSender,
     receiver: PacketReceiver,
     pub current_input: String,
-    pub received_messages: Vec<String>
+    pub received_messages: Vec<MesasgeFromUser>,
 }
 
 impl LoggedInState {
     pub fn send_message(&mut self) {
-        if !self.current_input.is_empty() {
-            self.sender.add_to_send_queue(Vec::from(self.current_input.as_bytes()));
-            self.current_input.clear();
+        if self.current_input.is_empty() {
+            return;
         }
+
+        let mut object = serde_json::value::Map::new();
+        object.insert(
+            "Type".to_string(),
+            serde_json::to_value(CommandType::MessageFromUser).unwrap(),
+        );
+
+        let mut current_message = String::new();
+        swap(&mut current_message, &mut self.current_input);
+        object.insert(
+            "Data".to_string(),
+            serde_json::to_value(MesasgeFromUser {
+                username: self.login_info.user.clone(),
+                text: current_message,
+            })
+            .expect("fail"),
+        );
+
+        let buf = serde_json::to_string(&object).unwrap();
+
+        self.sender.add_to_send_queue(Vec::from(buf.as_bytes()));
+        self.current_input.clear();
     }
 
     fn take_message(&mut self) -> Option<String> {
@@ -160,7 +183,60 @@ impl LoggedInState {
         }
 
         while let Some(data) = self.take_message() {
-            self.received_messages.push(data);
+            let mut cmd_json = match serde_json::from_slice::<serde_json::Value>(data.as_bytes()) {
+                Ok(cmd_json) => cmd_json,
+                Err(parse_err) => {
+                    println!(
+                        "Failed to parse command json: {}. Error: {}.",
+                        data, parse_err
+                    );
+                    continue;
+                }
+            };
+
+            let cmd_json = match cmd_json.as_object_mut() {
+                Some(map) => map,
+                None => {
+                    println!("Command json expected to be object");
+                    continue;
+                }
+            };
+
+            let key_command_type = "Type";
+            let command_type = match cmd_json.remove(key_command_type) {
+                Some(cmd_type_str) => match serde_json::from_value::<CommandType>(cmd_type_str) {
+                    Ok(command_type) => command_type,
+                    Err(err) => {
+                        println!("Failed to parse command type: {}", err);
+                        continue;
+                    }
+                },
+                None => {
+                    println!("Invalid json - {key_command_type} not found.");
+                    continue;
+                }
+            };
+
+            let key_commad_data = "Data";
+            let cmd_data_value = match cmd_json.remove(key_commad_data) {
+                Some(cmd_data_value) => cmd_data_value,
+                None => {
+                    println!("Invalid json - {key_commad_data} not found.");
+                    continue;
+                }
+            };
+
+            match command_type {
+                CommandType::MessageFromUser => {
+                    match serde_json::from_value::<MesasgeFromUser>(cmd_data_value) {
+                        Ok(message_from_user) => self.received_messages.push(message_from_user),
+                        Err(err) => {
+                            println!("Failed to parse message from user. {}", err);
+                            continue;
+                        }
+                    }
+                }
+            }
         }
 
         Client::LoggedIn(self)

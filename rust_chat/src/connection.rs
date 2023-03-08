@@ -62,7 +62,7 @@ impl HandshakeState {
                         })
                     }
                     Err(parse_err) => {
-                        println!("packet: {parse_err:#?}");
+                        println!("failed to parse packet as handshake message: {parse_err:#?}");
                         Connection::Closed(ClosedConnection {
                             reason: ConnectionClosedReason::InvalidHandshakeMessage,
                         })
@@ -100,6 +100,17 @@ pub struct EstablishedConnection {
     receiver: PacketReceiver,
 }
 
+#[derive(Serialize, Deserialize)]
+pub enum CommandType {
+    MessageFromUser,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct MesasgeFromUser {
+    pub username: String,
+    pub text: String,
+}
+
 impl EstablishedConnection {
     pub fn receive(mut self) -> Connection {
         match self.receiver.advance(&mut self.stream) {
@@ -117,6 +128,14 @@ impl EstablishedConnection {
                 reason: ConnectionClosedReason::PacketSendError(err),
             }),
         }
+    }
+
+    pub fn take_message(&mut self) -> Option<Vec<u8>> {
+        self.receiver.pop_packet()
+    }
+
+    pub fn enqueue_message(&mut self, message: String) {
+        self.sender.add_to_send_queue(message.into_bytes());
     }
 }
 
@@ -158,21 +177,5 @@ impl Connection {
             Connection::Established(state) => state.send(),
             Connection::Closed(state) => Connection::Closed(state),
         }
-    }
-
-    pub fn enqueue_message(&mut self, message: String) {
-        if let Connection::Established(state) = self {
-            state.sender.add_to_send_queue(message.into_bytes());
-        }
-    }
-
-    pub fn take_message(&mut self) -> Option<String> {
-        if let Connection::Established(state) = self {
-            if let Some(data) = state.receiver.pop_packet() {
-                return Some(String::from_utf8(data).unwrap());
-            }
-        }
-
-        None
     }
 }
